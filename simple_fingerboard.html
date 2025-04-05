@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple AR Fingerboard Tracking</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            text-align: center;
+            background-color: #f0f0f0;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        #videoContainer {
+            position: relative;
+            margin: 20px auto;
+            width: 640px;
+            height: 480px;
+            border: 3px solid #333;
+            overflow: hidden;
+        }
+        #videoInput {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 640px;
+            height: 480px;
+            transform: scaleX(-1); /* Mirror the video */
+        }
+        #canvasOverlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 640px;
+            height: 480px;
+            z-index: 10;
+        }
+        .controls {
+            margin: 20px 0;
+        }
+        button {
+            padding: 10px 15px;
+            margin: 0 5px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        #status {
+            margin: 10px 0;
+            padding: 10px;
+            background-color: #ddd;
+            border-radius: 4px;
+        }
+        #chordDisplay {
+            font-weight: bold;
+            font-size: 24px;
+            margin: 15px 0;
+        }
+        #audioPlayer {
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Simple AR Fingerboard Tracking</h1>
+        <p>Learn guitar chords with visual guidance</p>
+
+        <div id="status">Ready to start</div>
+
+        <div id="videoContainer">
+            <video id="videoInput" autoplay playsinline></video>
+            <canvas id="canvasOverlay"></canvas>
+        </div>
+
+        <div class="controls">
+            <button id="startButton">Start Camera</button>
+            <button id="stopButton" disabled>Stop</button>
+        </div>
+
+        <div id="chordDisplay">Select a song to begin</div>
+
+        <div class="song-controls">
+            <button id="songLetItBe">Let It Be</button>
+            <button id="songWonderwall">Wonderwall</button>
+            <button id="songAlabama">Sweet Home Alabama</button>
+            <button id="songBirthday">Happy Birthday</button>
+        </div>
+
+        <audio id="audioPlayer" controls>
+            <source src="" type="audio/mp3">
+            Your browser does not support the audio element.
+        </audio>
+    </div>
+
+    <script>
+        // Get DOM elements
+        const videoInput = document.getElementById('videoInput');
+        const canvasOverlay = document.getElementById('canvasOverlay');
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const statusDisplay = document.getElementById('status');
+        const chordDisplay = document.getElementById('chordDisplay');
+        const audioPlayer = document.getElementById('audioPlayer');
+        
+        // Song buttons
+        const songLetItBe = document.getElementById('songLetItBe');
+        const songWonderwall = document.getElementById('songWonderwall');
+        const songAlabama = document.getElementById('songAlabama');
+        const songBirthday = document.getElementById('songBirthday');
+        
+        // Video and canvas dimensions
+        const videoWidth = 640;
+        const videoHeight = 480;
+        
+        // Fingerboard parameters
+        const numStrings = 6;
+        const numFrets = 12;
+        let stringPositions = [];
+        let fretPositions = [];
+        
+        // Song data
+        const songs = {
+            "Let It Be": ["C Major", "G Major", "A Minor", "F Major"],
+            "Wonderwall": ["E Minor", "G Major", "D Major", "A Major"],
+            "Sweet Home Alabama": ["D Major", "C Major", "G Major"],
+            "Happy Birthday": ["G Major", "D Major", "C Major", "G7"]
+        };
+        
+        // Chord shapes (fret positions for each string, -1 means string not played)
+        const chordShapes = {
+            'C Major': [0, 1, 0, 2, 3, -1],
+            'G Major': [3, 0, 0, 0, 2, 3],
+            'D Major': [-1, -1, 0, 2, 3, 2],
+            'A Major': [0, 2, 2, 2, 0, -1],
+            'E Major': [0, 0, 1, 2, 2, 0],
+            'F Major': [1, 1, 2, 3, 3, 1],
+            'A Minor': [0, 1, 2, 2, 0, -1],
+            'E Minor': [0, 0, 0, 2, 2, 0],
+            'D Minor': [-1, -1, 0, 2, 3, 1],
+            'G7': [3, 0, 0, 0, 2, 1]
+        };
+        
+        // Current song state
+        let currentSong = null;
+        let currentChordIdx = 0;
+        let lastChordChange = Date.now();
+        const chordDisplayTime = 3000; // 3 seconds per chord
+        
+        // Stream and animation variables
+        let stream = null;
+        let isRunning = false;
+        let animationFrameId = null;
+        
+        // Initialize canvas
+        canvasOverlay.width = videoWidth;
+        canvasOverlay.height = videoHeight;
+        const ctx = canvasOverlay.getContext('2d');
+        
+        // Calculate fingerboard dimensions
+        function calculateFingerboard() {
+            const topLeftX = Math.floor(videoWidth * 0.1);
+            const topLeftY = Math.floor(videoHeight * 0.2);
+            const bottomRightX = Math.floor(videoWidth * 0.9);
+            const bottomRightY = Math.floor(videoHeight * 0.8);
+            
+            // Calculate string positions
+            const stringGap = (bottomRightY - topLeftY) / (numStrings - 1);
+            stringPositions = [];
+            for (let i = 0; i < numStrings; i++) {
+                stringPositions.push(Math.floor(topLeftY + i * stringGap));
+            }
+            
+            // Calculate fret positions
+            const fretGap = (bottomRightX - topLeftX) / numFrets;
+            fretPositions = [];
+            for (let i = 0; i <= numFrets; i++) {
+                fretPositions.push(Math.floor(topLeftX + i * fretGap));
+            }
+            
+            return { topLeftX, topLeftY, bottomRightX, bottomRightY };
+        }
+        
+        // Draw the fingerboard
+        function drawFingerboard() {
+            // Clear the canvas
+            ctx.clearRect(0, 0, canvasOverlay.width, canvasOverlay.height);
+            
+            const { topLeftX, topLeftY, bottomRightX, bottomRightY } = calculateFingerboard();
+            
+            // Draw semi-transparent background for the fingerboard
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+            ctx.fillRect(topLeftX, topLeftY, bottomRightX - topLeftX, bottomRightY - topLeftY);
+            
+            // Draw strings
+            ctx.strokeStyle = 'rgb(0, 255, 0)';
+            ctx.lineWidth = 2;
+            for (const y of stringPositions) {
+                ctx.beginPath();
+                ctx.moveTo(topLeftX, y);
+                ctx.lineTo(bottomRightX, y);
+                ctx.stroke();
+            }
+            
+            // Draw frets
+            for (const x of fretPositions) {
+                ctx.beginPath();
+                ctx.moveTo(x, topLeftY);
+                ctx.lineTo(x, bottomRightY);
+                ctx.stroke();
+            }
+            
+            // Add fret numbers
+            ctx.fillStyle = 'rgb(0, 255, 0)';
+            ctx.font = '12px Arial';
+            for (let i = 1; i < fretPositions.length; i++) {
+                ctx.fillText(i.toString(), fretPositions[i] - 8, topLeftY - 5);
+            }
+            
+            // If a song is selected, display song info and chord
+            if (currentSong) {
+                // Check if it's time to change chord
+                const currentTime = Date.now();
+                if (currentTime - lastChordChange > chordDisplayTime) {
+                    currentChordIdx = (currentChordIdx + 1) % songs[currentSong].length;
+                    lastChordChange = currentTime;
+                    
+                    // Update the chord display
+                    const currentChord = songs[currentSong][currentChordIdx];
+                    chordDisplay.textContent = `Playing: ${currentChord}`;
+                }
+                
+                // Get current chord
+                const currentChord = songs[currentSong][currentChordIdx];
+                
+                // Display song information
+                ctx.fillStyle = 'rgb(255, 255, 0)';
+                ctx.font = '16px Arial';
+                ctx.fillText(`Song: ${currentSong}`, topLeftX, topLeftY - 30);
+                ctx.fillText(`Play: ${currentChord}`, topLeftX, topLeftY - 10);
+                
+                // Display chord name
+                ctx.fillStyle = 'rgb(0, 255, 255)';
+                ctx.font = '20px Arial';
+                ctx.fillText(`Chord: ${currentChord}`, topLeftX, bottomRightY + 25);
+                
+                // Draw chord positions if it exists
+                if (chordShapes[currentChord]) {
+                    const chordShape = chordShapes[currentChord];
+                    
+                    ctx.strokeStyle = 'rgb(0, 255, 255)';
+                    ctx.lineWidth = 2;
+                    
+                    for (let stringIdx = 0; stringIdx < chordShape.length; stringIdx++) {
+                        const fret = chordShape[stringIdx];
+                        if (fret === -1) continue; // String not played
+                        
+                        // Calculate position
+                        const y = stringPositions[stringIdx];
+                        const x = Math.floor((fretPositions[fret] + fretPositions[fret+1]) / 2);
+                        
+                        // Draw a circle at the position
+                        ctx.beginPath();
+                        ctx.arc(x, y, 15, 0, 2 * Math.PI);
+                        ctx.stroke();
+                    }
+                }
+            }
+            
+            // Request next animation frame if running
+            if (isRunning) {
+                animationFrameId = requestAnimationFrame(drawFingerboard);
+            }
+        }
+        
+        // Start camera
+        startButton.addEventListener('click', async () => {
+            try {
+                // Request camera access
+                stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { width: videoWidth, height: videoHeight } 
+                });
+                
+                // Set video source
+                videoInput.srcObject = stream;
+                
+                // Start drawing fingerboard when video can play
+                videoInput.oncanplay = () => {
+                    isRunning = true;
+                    drawFingerboard();
+                    
+                    // Update UI
+                    startButton.disabled = true;
+                    stopButton.disabled = false;
+                    statusDisplay.textContent = 'Camera started. Select a song to practice.';
+                };
+                
+                // Start playing video
+                videoInput.play();
+                
+            } catch (err) {
+                statusDisplay.textContent = `Error accessing camera: ${err.message}`;
+                console.error('Error accessing camera:', err);
+            }
+        });
+        
+        // Stop camera
+        stopButton.addEventListener('click', () => {
+            if (stream) {
+                // Stop all tracks
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+            
+            // Stop animation
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+                animationFrameId = null;
+            }
+            
+            // Clear video
+            videoInput.srcObject = null;
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, canvasOverlay.width, canvasOverlay.height);
+            
+            // Update UI
+            isRunning = false;
+            startButton.disabled = false;
+            stopButton.disabled = true;
+            statusDisplay.textContent = 'Camera stopped.';
+            
+            // Stop audio
+            audioPlayer.pause();
+        });
+        
+        // Select song functions
+        function selectSong(songName) {
+            if (songs[songName]) {
+                currentSong = songName;
+                currentChordIdx = 0;
+                lastChordChange = Date.now();
+                
+                // Update status
+                statusDisplay.textContent = `Selected song: ${songName}`;
+                
+                // Update chord display
+                const chordName = songs[songName][currentChordIdx];
+                chordDisplay.textContent = `Playing: ${chordName}`;
+                
+                // Play audio for Happy Birthday
+                if (songName === "Happy Birthday") {
+                    // Set the audio source to the Happy Birthday MP3
+                    audioPlayer.src = "happy-birthday-314197.mp3";
+                    audioPlayer.play().catch(err => {
+                        console.log("Audio play error:", err);
+                        statusDisplay.textContent += " (Audio file missing)";
+                    });
+                } else {
+                    audioPlayer.pause();
+                }
+            }
+        }
+        
+        // Set up song selection buttons
+        songLetItBe.addEventListener('click', () => selectSong("Let It Be"));
+        songWonderwall.addEventListener('click', () => selectSong("Wonderwall"));
+        songAlabama.addEventListener('click', () => selectSong("Sweet Home Alabama"));
+        songBirthday.addEventListener('click', () => selectSong("Happy Birthday"));
+    </script>
+</body>
+</html> 

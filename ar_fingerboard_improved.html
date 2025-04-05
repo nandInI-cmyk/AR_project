@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AR Fingerboard Tracker - Improved</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background-color: #121212;
+            color: white;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+        h1 {
+            color: #4CAF50;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+            margin-bottom: 20px;
+        }
+        .container {
+            position: relative;
+            max-width: 960px;
+            width: 100%;
+            margin: 0 auto;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.3);
+            border-radius: 10px;
+            overflow: hidden;
+            background-color: #1e1e1e;
+            padding-bottom: 20px;
+        }
+        .video-container {
+            position: relative;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        #videoElement {
+            width: 100%;
+            height: auto;
+            background-color: #111;
+            display: block;
+        }
+        #canvasOutput {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        .controls {
+            margin: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            width: calc(100% - 40px);
+            justify-content: center;
+            background-color: #2a2a2a;
+            padding: 15px;
+            border-radius: 8px;
+        }
+        button {
+            padding: 10px 18px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: bold;
+            min-width: 120px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        button:hover {
+            background-color: #45a049;
+            transform: translateY(-2px);
+        }
+        button:disabled {
+            background-color: #555;
+            cursor: not-allowed;
+            transform: none;
+        }
+        select {
+            padding: 10px 15px;
+            border-radius: 6px;
+            background-color: #333;
+            color: white;
+            border: 1px solid #555;
+            min-width: 150px;
+        }
+        #status {
+            margin: 20px;
+            padding: 12px 15px;
+            background-color: #333;
+            border-radius: 8px;
+            width: calc(100% - 40px);
+            text-align: center;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>AR Fingerboard Tracking</h1>
+    <div class="container">
+        <div class="video-container">
+            <video id="videoElement" autoplay></video>
+            <canvas id="canvasOutput"></canvas>
+        </div>
+        <div class="controls">
+            <button id="startButton">Start Camera</button>
+            <button id="stopButton" disabled>Stop Camera</button>
+            <select id="songSelect">
+                <option value="Let It Be">Let It Be</option>
+                <option value="Wonderwall">Wonderwall</option>
+                <option value="Sweet Home Alabama">Sweet Home Alabama</option>
+                <option value="Happy Birthday">Happy Birthday</option>
+            </select>
+            <button id="playButton" disabled>Play Song</button>
+            <button id="stopSongButton" disabled>Stop Song</button>
+        </div>
+        <div id="status">Ready. Click "Start Camera" to begin.</div>
+    </div>
+    
+    <audio id="audioPlayer" style="display: none;"></audio>
+
+    <script>
+        // Global variables
+        const video = document.getElementById('videoElement');
+        const canvas = document.getElementById('canvasOutput');
+        const ctx = canvas.getContext('2d');
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const songSelect = document.getElementById('songSelect');
+        const playButton = document.getElementById('playButton');
+        const stopSongButton = document.getElementById('stopSongButton');
+        const statusElement = document.getElementById('status');
+        const audioPlayer = document.getElementById('audioPlayer');
+        
+        let streaming = false;
+        let stream = null;
+        let currentSong = null;
+        let currentChordIdx = 0;
+        let lastChordChangeTime = Date.now();
+        let chordDisplayTime = 3000; // 3 seconds
+        let animationId = null;
+        
+        // Fingerboard configuration
+        const numStrings = 6;
+        const numFrets = 12;
+        let stringPositions = [];
+        let fretPositions = [];
+        
+        // Note mapping
+        const notes = [
+            ['E2', 'F2', 'F#2', 'G2', 'G#2', 'A2', 'A#2', 'B2', 'C3', 'C#3', 'D3', 'D#3', 'E3'],
+            ['B2', 'C3', 'C#3', 'D3', 'D#3', 'E3', 'F3', 'F#3', 'G3', 'G#3', 'A3', 'A#3', 'B3'],
+            ['G3', 'G#3', 'A3', 'A#3', 'B3', 'C4', 'C#4', 'D4', 'D#4', 'E4', 'F4', 'F#4', 'G4'],
+            ['D3', 'D#3', 'E3', 'F3', 'F#3', 'G3', 'G#3', 'A3', 'A#3', 'B3', 'C4', 'C#4', 'D4'],
+            ['A2', 'A#2', 'B2', 'C3', 'C#3', 'D3', 'D#3', 'E3', 'F3', 'F#3', 'G3', 'G#3', 'A3'],
+            ['E2', 'F2', 'F#2', 'G2', 'G#2', 'A2', 'A#2', 'B2', 'C3', 'C#3', 'D3', 'D#3', 'E3']
+        ];
+        
+        // Chord shapes
+        const chordShapes = {
+            'C Major': [0, 1, 0, 2, 3, -1],
+            'G Major': [3, 0, 0, 0, 2, 3],
+            'D Major': [-1, -1, 0, 2, 3, 2],
+            'A Major': [0, 2, 2, 2, 0, -1],
+            'E Major': [0, 0, 1, 2, 2, 0],
+            'F Major': [1, 1, 2, 3, 3, 1],
+            'A Minor': [0, 1, 2, 2, 0, -1],
+            'E Minor': [0, 0, 0, 2, 2, 0],
+            'D Minor': [-1, -1, 0, 2, 3, 1],
+            'G7': [3, 0, 0, 0, 2, 1]
+        };
+        
+        // Song chord progressions
+        const songs = {
+            "Wonderwall": ["E Minor", "G Major", "D Major", "A Major"],
+            "Let It Be": ["C Major", "G Major", "A Minor", "F Major"],
+            "Sweet Home Alabama": ["D Major", "C Major", "G Major"],
+            "Happy Birthday": ["G Major", "D Major", "C Major", "G7"]
+        };
+        
+        // Song audio file (assuming the MP3 is in the same directory)
+        const songFiles = {
+            "Happy Birthday": "happy-birthday-314197.mp3"
+        };
+        
+        // Finger tracking variables
+        let fingerPositions = [];
+        let lastFingerPositions = [];
+        const fingerNames = ["Thumb", "Index", "Middle", "Ring", "Pinky"];
+        const maxFingers = 5;
+        
+        // Start camera
+        startButton.addEventListener('click', () => {
+            if (streaming) return;
+            
+            navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+                .then(function(s) {
+                    stream = s;
+                    video.srcObject = stream;
+                    video.play();
+                    
+                    // Set video event handler
+                    video.addEventListener('canplay', () => {
+                        if (!streaming) {
+                            // Adjust canvas size to match video
+                            canvas.width = video.videoWidth;
+                            canvas.height = video.videoHeight;
+                            streaming = true;
+                        }
+                    });
+                    
+                    startButton.disabled = true;
+                    stopButton.disabled = false;
+                    playButton.disabled = false;
+                    statusElement.textContent = "Camera started. Select a song and click 'Play Song'.";
+                    
+                    // Start processing
+                    processVideo();
+                })
+                .catch(function(err) {
+                    console.error("Error accessing camera:", err);
+                    statusElement.textContent = "Error accessing camera. Check permissions.";
+                });
+        });
+        
+        // Stop camera
+        stopButton.addEventListener('click', () => {
+            stopCamera();
+        });
+        
+        function stopCamera() {
+            if (streaming) {
+                if (animationId) {
+                    cancelAnimationFrame(animationId);
+                    animationId = null;
+                }
+                
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                }
+                
+                video.srcObject = null;
+                streaming = false;
+                startButton.disabled = false;
+                stopButton.disabled = true;
+                playButton.disabled = true;
+                stopSongButton.disabled = true;
+                
+                // Clear canvas
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                
+                // Stop audio if playing
+                if (audioPlayer.src) {
+                    audioPlayer.pause();
+                    audioPlayer.currentTime = 0;
+                }
+                
+                statusElement.textContent = "Camera stopped. Click 'Start Camera' to begin again.";
+            }
+        }
+        
+        // Play selected song
+        playButton.addEventListener('click', () => {
+            let songName = songSelect.value;
+            currentSong = songName;
+            currentChordIdx = 0;
+            lastChordChangeTime = Date.now();
+            
+            statusElement.textContent = `Playing song: ${songName}`;
+            
+            // Play audio if available
+            if (songFiles[songName]) {
+                try {
+                    audioPlayer.src = songFiles[songName];
+                    audioPlayer.play()
+                        .then(() => {
+                            stopSongButton.disabled = false;
+                        })
+                        .catch(err => {
+                            console.error("Error playing audio:", err);
+                        });
+                } catch (e) {
+                    console.error("Error loading audio:", e);
+                }
+            }
+        });
+        
+        // Stop song
+        stopSongButton.addEventListener('click', () => {
+            if (audioPlayer.src) {
+                audioPlayer.pause();
+                audioPlayer.currentTime = 0;
+                audioPlayer.src = '';
+                currentSong = null;
+                stopSongButton.disabled = true;
+                statusElement.textContent = "Song stopped.";
+            }
+        });
+        
+        // Calculate fingerboard position
+        function calculateFingerboard() {
+            const width = canvas.width;
+            const height = canvas.height;
+            
+            // Adjust fingerboard size for better visibility
+            const topLeft = {
+                x: Math.floor(width * 0.15),
+                y: Math.floor(height * 0.2)
+            };
+            const bottomRight = {
+                x: Math.floor(width * 0.85),
+                y: Math.floor(height * 0.75)
+            };
+            
+            // Calculate string positions
+            const stringGap = (bottomRight.y - topLeft.y) / (numStrings - 1);
+            stringPositions = [];
+            for (let i = 0; i < numStrings; i++) {
+                stringPositions.push(Math.floor(topLeft.y + i * stringGap));
+            }
+            
+            // Calculate fret positions
+            const fretGap = (bottomRight.x - topLeft.x) / numFrets;
+            fretPositions = [];
+            for (let i = 0; i <= numFrets; i++) {
+                fretPositions.push(Math.floor(topLeft.x + i * fretGap));
+            }
+            
+            return { topLeft, bottomRight };
+        }
+        
+        // Draw fingerboard
+        function drawFingerboard(topLeft, bottomRight) {
+            // Draw background
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
+            
+            // Draw strings
+            ctx.strokeStyle = 'rgba(0, 255, 0, 1.0)';
+            ctx.lineWidth = 4;
+            for (let y of stringPositions) {
+                ctx.beginPath();
+                ctx.moveTo(topLeft.x, y);
+                ctx.lineTo(bottomRight.x, y);
+                ctx.stroke();
+            }
+            
+            // Draw frets
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.lineWidth = 3;
+            for (let x of fretPositions) {
+                ctx.beginPath();
+                ctx.moveTo(x, topLeft.y);
+                ctx.lineTo(x, bottomRight.y);
+                ctx.stroke();
+            }
+            
+            // Add fret numbers
+            ctx.font = 'bold 18px Arial';
+            ctx.textAlign = 'center';
+            
+            for (let i = 1; i <= numFrets; i++) {
+                let x = (fretPositions[i-1] + fretPositions[i]) / 2;
+                
+                // Draw background for text
+                ctx.fillStyle = 'black';
+                let textWidth = ctx.measureText(i.toString()).width;
+                ctx.fillRect(x - textWidth/2 - 5, topLeft.y - 25, textWidth + 10, 22);
+                
+                // Draw text
+                ctx.fillStyle = '#00ff00';
+                ctx.fillText(i.toString(), x, topLeft.y - 10);
+            }
+            
+            // Add string names
+            const stringNames = ['E', 'A', 'D', 'G', 'B', 'E'];
+            ctx.font = 'bold 16px Arial';
+            ctx.textAlign = 'right';
+            
+            for (let i = 0; i < stringPositions.length; i++) {
+                // Draw background for string names
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+                let textWidth = ctx.measureText(stringNames[i]).width;
+                ctx.fillRect(topLeft.x - textWidth - 15, stringPositions[i] - 10, textWidth + 10, 20);
+                
+                // Draw string name
+                ctx.fillStyle = 'rgba(255, 255, 0, 0.9)';
+                ctx.fillText(stringNames[i], topLeft.x - 10, stringPositions[i] + 5);
+            }
+        }
+        
+        // Simulate finger detection
+        function detectFingers(event) {
+            if (!streaming) return;
+            
+            // Get canvas bounds
+            const rect = canvas.getBoundingClientRect();
+            
+            // Calculate relative position
+            const x = (event.clientX - rect.left) * (canvas.width / rect.width);
+            const y = (event.clientY - rect.top) * (canvas.height / rect.height);
+            
+            // Store finger positions (only using one finger for simplicity)
+            // In a real app, we'd use hand tracking libraries
+            let fingerPosition = {
+                x: x,
+                y: y,
+                timestamp: Date.now()
+            };
+            
+            // Add to finger positions if close enough to fingerboard
+            const fbRect = calculateFingerboard();
+            const padding = 25;
+            
+            if (x >= fbRect.topLeft.x - padding && 
+                x <= fbRect.bottomRight.x + padding && 
+                y >= fbRect.topLeft.y - padding && 
+                y <= fbRect.bottomRight.y + padding) {
+                
+                // Find closest string
+                let stringIdx = 0;
+                let minStringDist = Number.MAX_VALUE;
+                
+                for (let i = 0; i < stringPositions.length; i++) {
+                    const dist = Math.abs(y - stringPositions[i]);
+                    if (dist < minStringDist) {
+                        minStringDist = dist;
+                        stringIdx = i;
+                    }
+                }
+                
+                // Find closest fret
+                let fretIdx = 0;
+                let minFretDist = Number.MAX_VALUE;
+                
+                for (let i = 0; i < fretPositions.length; i++) {
+                    const dist = Math.abs(x - fretPositions[i]);
+                    if (dist < minFretDist) {
+                        minFretDist = dist;
+                        fretIdx = i;
+                    }
+                }
+                
+                // Adjust fret index
+                if (x < fretPositions[0] + padding) {
+                    fretIdx = 0;
+                } else if (fretIdx > 0) {
+                    fretIdx -= 1;
+                }
+                
+                // Ensure fret index is in bounds
+                if (fretIdx >= notes[0].length) {
+                    fretIdx = notes[0].length - 1;
+                }
+                
+                // Get note
+                const note = notes[stringIdx][fretIdx];
+                
+                // Add to finger positions
+                fingerPositions.push({
+                    x: x,
+                    y: y,
+                    stringIdx: stringIdx,
+                    fretIdx: fretIdx,
+                    note: note,
+                    finger: "Index" // Assume index finger for simplicity
+                });
+                
+                // Limit to 5 most recent positions
+                if (fingerPositions.length > 5) {
+                    fingerPositions.shift();
+                }
+            }
+        }
+        
+        // Add mouse event listeners for finger simulation
+        canvas.addEventListener('mousemove', detectFingers);
+        canvas.addEventListener('click', (event) => {
+            // Add finger position on click
+            detectFingers(event);
+            
+            // Keep it active longer
+            lastFingerPositions = [...fingerPositions];
+        });
+        
+        // Draw finger positions
+        function drawFingerPositions() {
+            // Draw all finger positions
+            for (let pos of fingerPositions) {
+                // Draw glow effect
+                ctx.fillStyle = 'rgba(50, 50, 200, 0.5)';
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, 20, 0, 2 * Math.PI);
+                ctx.fill();
+                
+                ctx.fillStyle = 'rgba(100, 100, 255, 0.7)';
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, 15, 0, 2 * Math.PI);
+                ctx.fill();
+                
+                // Draw main circle
+                ctx.fillStyle = 'rgba(0, 0, 255, 0.9)';
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, 12, 0, 2 * Math.PI);
+                ctx.fill();
+                
+                // White border
+                ctx.strokeStyle = 'white';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                
+                // Draw note with background
+                if (pos.note) {
+                    ctx.font = 'bold 18px Arial';
+                    ctx.textAlign = 'left';
+                    const text = `${pos.note} (${pos.finger})`;
+                    const textWidth = ctx.measureText(text).width;
+                    
+                    // Background
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+                    ctx.fillRect(pos.x + 15, pos.y - 15, textWidth + 10, 30);
+                    
+                    // Text
+                    ctx.fillStyle = 'white';
+                    ctx.fillText(text, pos.x + 20, pos.y + 5);
+                }
+            }
+            
+            // Also draw any saved finger positions with fading effect
+            for (let pos of lastFingerPositions) {
+                // Draw semi-transparent marker
+                ctx.fillStyle = 'rgba(0, 0, 200, 0.3)';
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, 15, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+        }
+        
+        // Show chord positions
+        function displayChordGuidance(topLeft, bottomRight, chordName) {
+            if (!chordShapes[chordName]) return;
+            
+            const chordShape = chordShapes[chordName];
+            
+            // Display chord name
+            ctx.font = 'bold 26px Arial';
+            const text = `Chord: ${chordName}`;
+            const textWidth = ctx.measureText(text).width;
+            
+            // Background
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+            ctx.fillRect(topLeft.x - 5, bottomRight.y + 10, textWidth + 10, 35);
+            
+            // Text
+            ctx.fillStyle = 'rgba(0, 255, 255, 1.0)';
+            ctx.fillText(text, topLeft.x, bottomRight.y + 35);
+            
+            // Draw finger positions for chord
+            for (let stringIdx = 0; stringIdx < chordShape.length; stringIdx++) {
+                const fret = chordShape[stringIdx];
+                if (fret === -1) continue; // String not played
+                
+                // Calculate position
+                const y = stringPositions[stringIdx];
+                const x = (fretPositions[fret] + fretPositions[fret+1]) / 2;
+                
+                // Draw glow effect
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+                ctx.beginPath();
+                ctx.arc(x, y, 18, 0, 2 * Math.PI);
+                ctx.fill();
+                
+                // Draw main marker
+                ctx.fillStyle = 'rgba(0, 255, 255, 0.9)';
+                ctx.beginPath();
+                ctx.arc(x, y, 15, 0, 2 * Math.PI);
+                ctx.fill();
+                
+                // Border
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                
+                // Add fret number
+                ctx.fillStyle = 'black';
+                ctx.font = 'bold 14px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(fret.toString(), x, y);
+            }
+        }
+        
+        // Show current song progression
+        function updateSongProgression(topLeft, bottomRight) {
+            if (!currentSong) return;
+            
+            // Check if it's time to change chord
+            const currentTime = Date.now();
+            if (currentTime - lastChordChangeTime > chordDisplayTime) {
+                currentChordIdx = (currentChordIdx + 1) % songs[currentSong].length;
+                lastChordChangeTime = currentTime;
+            }
+            
+            // Get current chord
+            const currentChord = songs[currentSong][currentChordIdx];
+            
+            // Display song info
+            ctx.font = 'bold 20px Arial';
+            
+            // Song name
+            const songText = `Song: ${currentSong}`;
+            const songTextWidth = ctx.measureText(songText).width;
+            
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(topLeft.x - 5, topLeft.y - 80, songTextWidth + 10, 30);
+            
+            ctx.fillStyle = 'rgba(255, 255, 0, 0.9)';
+            ctx.fillText(songText, topLeft.x, topLeft.y - 55);
+            
+            // Current chord
+            const chordText = `Play: ${currentChord}`;
+            const chordTextWidth = ctx.measureText(chordText).width;
+            
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(topLeft.x - 5, topLeft.y - 45, chordTextWidth + 10, 30);
+            
+            ctx.fillStyle = 'rgba(255, 255, 0, 0.9)';
+            ctx.fillText(chordText, topLeft.x, topLeft.y - 20);
+            
+            // Display chord guidance
+            displayChordGuidance(topLeft, bottomRight, currentChord);
+        }
+        
+        // Main processing function
+        function processVideo() {
+            if (!streaming) return;
+            
+            // Draw video frame
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            // Calculate fingerboard
+            const fbRect = calculateFingerboard();
+            
+            // Draw fingerboard
+            drawFingerboard(fbRect.topLeft, fbRect.bottomRight);
+            
+            // Draw finger positions
+            drawFingerPositions();
+            
+            // Update song progression
+            updateSongProgression(fbRect.topLeft, fbRect.bottomRight);
+            
+            // Show help text at beginning
+            if (Date.now() - startTime < 5000) {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                ctx.fillRect(canvas.width/2 - 200, canvas.height/2 - 30, 400, 60);
+                
+                ctx.fillStyle = 'white';
+                ctx.font = 'bold 20px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText("Click on fingerboard to place fingers", canvas.width/2, canvas.height/2);
+            }
+            
+            // Request next frame
+            animationId = requestAnimationFrame(processVideo);
+        }
+        
+        // Track start time
+        const startTime = Date.now();
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            if (streaming) {
+                // Adjust canvas size
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+            }
+        });
+        
+        // Clean up resources when closing
+        window.addEventListener('beforeunload', () => {
+            stopCamera();
+        });
+    </script>
+</body>
+</html> 

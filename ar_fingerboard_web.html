@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AR Fingerboard Tracking Web</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background-color: #121212;
+            color: white;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+        h1 {
+            color: #4CAF50;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .container {
+            position: relative;
+            max-width: 960px;
+            width: 100%;
+            margin: 0 auto;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.3);
+            border-radius: 10px;
+            overflow: hidden;
+            background-color: #1e1e1e;
+            padding-bottom: 20px;
+        }
+        .video-container {
+            position: relative;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        #videoElement {
+            width: 100%;
+            height: auto;
+            background-color: #111;
+            display: block;
+        }
+        #canvasOutput {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        .controls {
+            margin: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            width: calc(100% - 40px);
+            justify-content: center;
+            background-color: #2a2a2a;
+            padding: 15px;
+            border-radius: 8px;
+        }
+        button {
+            padding: 10px 18px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: bold;
+            min-width: 120px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        button:hover {
+            background-color: #45a049;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+        }
+        button:active {
+            transform: translateY(0);
+        }
+        button:disabled {
+            background-color: #555;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        select {
+            padding: 10px 15px;
+            border-radius: 6px;
+            background-color: #333;
+            color: white;
+            border: 1px solid #555;
+            min-width: 150px;
+        }
+        .debug-info {
+            margin: 20px;
+            padding: 15px;
+            background-color: rgba(0, 0, 0, 0.7);
+            border-radius: 8px;
+            width: calc(100% - 40px);
+            font-family: 'Consolas', monospace;
+            font-size: 13px;
+            max-height: 200px;
+            overflow-y: auto;
+            box-shadow: inset 0 0 10px rgba(0,0,0,0.5);
+        }
+        #status {
+            margin: 20px;
+            padding: 12px 15px;
+            background-color: #333;
+            border-radius: 8px;
+            width: calc(100% - 40px);
+            text-align: center;
+            font-weight: bold;
+            box-shadow: 0 3px 6px rgba(0,0,0,0.2);
+        }
+        @media (max-width: 768px) {
+            .container {
+                width: 95%;
+            }
+            button, select {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>AR Fingerboard Tracking</h1>
+    <div class="container">
+        <div class="video-container">
+            <video id="videoElement" autoplay></video>
+            <canvas id="canvasOutput"></canvas>
+        </div>
+        <div class="controls">
+            <button id="startButton">Start Camera</button>
+            <button id="stopButton" disabled>Stop Camera</button>
+            <select id="songSelect">
+                <option value="Let It Be">Let It Be</option>
+                <option value="Wonderwall">Wonderwall</option>
+                <option value="Sweet Home Alabama">Sweet Home Alabama</option>
+                <option value="Happy Birthday">Happy Birthday</option>
+            </select>
+            <button id="playButton" disabled>Play Song</button>
+            <button id="stopSongButton" disabled>Stop Song</button>
+        </div>
+        <div id="status">Status: Ready. Click "Start Camera" to begin.</div>
+        <div class="debug-info" id="debugInfo">Debug information will appear here.</div>
+    </div>
+    
+    <audio id="audioPlayer" style="display: none;"></audio>
+
+    <script async src="https://docs.opencv.org/4.7.0/opencv.js" type="text/javascript"></script>
+    <script>
+        // Global variables
+        let video = document.getElementById('videoElement');
+        let canvas = document.getElementById('canvasOutput');
+        let context = canvas.getContext('2d');
+        let startButton = document.getElementById('startButton');
+        let stopButton = document.getElementById('stopButton');
+        let songSelect = document.getElementById('songSelect');
+        let playButton = document.getElementById('playButton');
+        let stopSongButton = document.getElementById('stopSongButton');
+        let statusElement = document.getElementById('status');
+        let debugInfoElement = document.getElementById('debugInfo');
+        let audioPlayer = document.getElementById('audioPlayer');
+        
+        let streaming = false;
+        let stream = null;
+        let src = null;
+        let dst = null;
+        let cap = null;
+        let currentSong = null;
+        let currentChordIdx = 0;
+        let lastChordChangeTime = Date.now();
+        let chordDisplayTime = 3000; // 3 seconds in milliseconds
+        
+        // AR Fingerboard configuration
+        const numStrings = 6;
+        const numFrets = 12;
+        let stringPositions = [];
+        let fretPositions = [];
+        
+        // Note mapping (for future implementation)
+        const notes = [
+            ['E2', 'F2', 'F#2', 'G2', 'G#2', 'A2', 'A#2', 'B2', 'C3', 'C#3', 'D3', 'D#3', 'E3'],
+            ['B2', 'C3', 'C#3', 'D3', 'D#3', 'E3', 'F3', 'F#3', 'G3', 'G#3', 'A3', 'A#3', 'B3'],
+            ['G3', 'G#3', 'A3', 'A#3', 'B3', 'C4', 'C#4', 'D4', 'D#4', 'E4', 'F4', 'F#4', 'G4'],
+            ['D3', 'D#3', 'E3', 'F3', 'F#3', 'G3', 'G#3', 'A3', 'A#3', 'B3', 'C4', 'C#4', 'D4'],
+            ['A2', 'A#2', 'B2', 'C3', 'C#3', 'D3', 'D#3', 'E3', 'F3', 'F#3', 'G3', 'G#3', 'A3'],
+            ['E2', 'F2', 'F#2', 'G2', 'G#2', 'A2', 'A#2', 'B2', 'C3', 'C#3', 'D3', 'D#3', 'E3']
+        ];
+        
+        // Chord shapes
+        const chordShapes = {
+            'C Major': [0, 1, 0, 2, 3, -1],
+            'G Major': [3, 0, 0, 0, 2, 3],
+            'D Major': [-1, -1, 0, 2, 3, 2],
+            'A Major': [0, 2, 2, 2, 0, -1],
+            'E Major': [0, 0, 1, 2, 2, 0],
+            'F Major': [1, 1, 2, 3, 3, 1],
+            'A Minor': [0, 1, 2, 2, 0, -1],
+            'E Minor': [0, 0, 0, 2, 2, 0],
+            'D Minor': [-1, -1, 0, 2, 3, 1],
+            'G7': [3, 0, 0, 0, 2, 1]
+        };
+        
+        // Song chord progressions
+        const songs = {
+            "Wonderwall": ["E Minor", "G Major", "D Major", "A Major"],
+            "Let It Be": ["C Major", "G Major", "A Minor", "F Major"],
+            "Sweet Home Alabama": ["D Major", "C Major", "G Major"],
+            "Happy Birthday": ["G Major", "D Major", "C Major", "G7"]
+        };
+        
+        // Song audio files
+        const songFiles = {
+            "Happy Birthday": "happy-birthday-314197.mp3"
+        };
+        
+        // Wait for OpenCV.js to be loaded
+        function onOpenCvReady() {
+            statusElement.innerHTML = "OpenCV.js is ready. Click 'Start Camera' to begin.";
+            startButton.disabled = false;
+            log("OpenCV.js loaded successfully");
+        }
+        
+        // Handle errors
+        function onOpenCvError() {
+            statusElement.innerHTML = "Failed to load OpenCV.js. Using fallback mode.";
+            log("Error: Failed to load OpenCV.js");
+            // Even if OpenCV fails, we can still show a basic fingerboard
+            startButton.disabled = false;
+        }
+        
+        // Start camera
+        startButton.addEventListener('click', () => {
+            if (streaming) return;
+            
+            navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+                .then(function(s) {
+                    stream = s;
+                    video.srcObject = stream;
+                    video.play();
+                    streaming = true;
+                    startButton.disabled = true;
+                    stopButton.disabled = false;
+                    playButton.disabled = false;
+                    
+                    statusElement.innerHTML = "Camera started. Select a song and click 'Play Song'.";
+                    log("Camera started successfully");
+                    
+                    // Start processing video frames
+                    processVideo();
+                })
+                .catch(function(err) {
+                    log("Error accessing camera: " + err);
+                    statusElement.innerHTML = "Error accessing camera. Check permissions.";
+                });
+        });
+        
+        // Stop camera
+        stopButton.addEventListener('click', () => {
+            if (!streaming) return;
+            
+            stopCamera();
+            statusElement.innerHTML = "Camera stopped. Click 'Start Camera' to begin again.";
+        });
+        
+        function stopCamera() {
+            if (streaming) {
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                }
+                video.srcObject = null;
+                streaming = false;
+                startButton.disabled = false;
+                stopButton.disabled = true;
+                playButton.disabled = true;
+                stopSongButton.disabled = true;
+                
+                // Stop song if playing
+                if (audioPlayer.src) {
+                    audioPlayer.pause();
+                    audioPlayer.currentTime = 0;
+                }
+                
+                log("Camera stopped");
+            }
+        }
+        
+        // Play selected song
+        playButton.addEventListener('click', () => {
+            let songName = songSelect.value;
+            currentSong = songName;
+            currentChordIdx = 0;
+            lastChordChangeTime = Date.now();
+            
+            statusElement.innerHTML = `Playing song: ${songName}`;
+            log(`Selected song: ${songName}`);
+            
+            // Play audio if available
+            if (songFiles[songName]) {
+                try {
+                    audioPlayer.src = songFiles[songName];
+                    audioPlayer.play()
+                        .then(() => {
+                            stopSongButton.disabled = false;
+                            log(`Playing audio: ${songFiles[songName]}`);
+                        })
+                        .catch(err => {
+                            log(`Error playing audio: ${err}`);
+                        });
+                } catch (e) {
+                    log(`Error loading audio: ${e}`);
+                }
+            }
+        });
+        
+        // Stop song
+        stopSongButton.addEventListener('click', () => {
+            if (audioPlayer.src) {
+                audioPlayer.pause();
+                audioPlayer.currentTime = 0;
+                audioPlayer.src = '';
+                currentSong = null;
+                stopSongButton.disabled = true;
+                
+                statusElement.innerHTML = "Song stopped.";
+                log("Song stopped");
+            }
+        });
+        
+        // Set up video after it has loaded
+        video.addEventListener('canplay', () => {
+            if (!streaming) {
+                // Adjust canvas size to match video
+                let width = video.videoWidth;
+                let height = video.videoHeight;
+                canvas.width = width;
+                canvas.height = height;
+                
+                streaming = true;
+                log(`Video dimensions: ${width}x${height}`);
+            }
+        });
+        
+        // Calculate fingerboard position on the video frame
+        function calculateFingerboard(frame) {
+            let width = frame.cols;
+            let height = frame.rows;
+            
+            // Define fingerboard region (adjust as needed)
+            let topLeft = { x: Math.floor(width * 0.1), y: Math.floor(height * 0.2) };
+            let bottomRight = { x: Math.floor(width * 0.9), y: Math.floor(height * 0.8) };
+            
+            // Calculate string positions
+            let stringGap = (bottomRight.y - topLeft.y) / (numStrings - 1);
+            stringPositions = [];
+            for (let i = 0; i < numStrings; i++) {
+                stringPositions.push(Math.floor(topLeft.y + i * stringGap));
+            }
+            
+            // Calculate fret positions
+            let fretGap = (bottomRight.x - topLeft.x) / numFrets;
+            fretPositions = [];
+            for (let i = 0; i <= numFrets; i++) {
+                fretPositions.push(Math.floor(topLeft.x + i * fretGap));
+            }
+            
+            return { topLeft, bottomRight };
+        }
+        
+        // Draw the fingerboard on the canvas
+        function drawFingerboard(ctx, topLeft, bottomRight) {
+            // Draw semi-transparent background for better visibility
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)'; // Darker background for better contrast
+            ctx.fillRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
+            
+            // Draw strings with higher contrast
+            ctx.strokeStyle = 'rgba(0, 255, 0, 1.0)'; // Full opacity for better visibility
+            ctx.lineWidth = 4; // Thicker strings
+            for (let y of stringPositions) {
+                ctx.beginPath();
+                ctx.moveTo(topLeft.x, y);
+                ctx.lineTo(bottomRight.x, y);
+                ctx.stroke();
+            }
+            
+            // Draw frets with higher contrast
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)'; // White frets for better contrast
+            ctx.lineWidth = 3;
+            for (let x of fretPositions) {
+                ctx.beginPath();
+                ctx.moveTo(x, topLeft.y);
+                ctx.lineTo(x, bottomRight.y);
+                ctx.stroke();
+            }
+            
+            // Add fret numbers with better visibility
+            ctx.font = 'bold 18px Arial'; // Bolder font
+            ctx.textAlign = 'center';
+            
+            for (let i = 1; i <= numFrets; i++) {
+                let x = (fretPositions[i-1] + fretPositions[i]) / 2;
+                // Black background for text
+                ctx.fillStyle = 'black';
+                let textWidth = ctx.measureText(i.toString()).width;
+                ctx.fillRect(x - textWidth/2 - 5, topLeft.y - 25, textWidth + 10, 22);
+                
+                // Bright text color
+                ctx.fillStyle = '#00ff00';
+                ctx.fillText(i.toString(), x, topLeft.y - 10);
+            }
+            
+            // Add visual indicators for string names (E, A, D, G, B, E)
+            const stringNames = ['E', 'A', 'D', 'G', 'B', 'E'];
+            ctx.font = 'bold 16px Arial';
+            ctx.textAlign = 'right';
+            ctx.fillStyle = 'rgba(255, 255, 0, 0.9)';
+            
+            for (let i = 0; i < stringPositions.length; i++) {
+                // Background for string names
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+                let textWidth = ctx.measureText(stringNames[i]).width;
+                ctx.fillRect(topLeft.x - textWidth - 15, stringPositions[i] - 10, textWidth + 10, 20);
+                
+                // String name text
+                ctx.fillStyle = 'rgba(255, 255, 0, 0.9)';
+                ctx.fillText(stringNames[i], topLeft.x - 10, stringPositions[i] + 5);
+            }
+        }
+        
+        // Update and display current chord in song progression
+        function updateSongProgression(ctx, topLeft, bottomRight) {
+            if (!currentSong) return;
+            
+            // Check if it's time to change the chord
+            let currentTime = Date.now();
+            if (currentTime - lastChordChangeTime > chordDisplayTime) {
+                currentChordIdx = (currentChordIdx + 1) % songs[currentSong].length;
+                lastChordChangeTime = currentTime;
+            }
+            
+            // Get current chord
+            let currentChord = songs[currentSong][currentChordIdx];
+            
+            // Display song information
+            ctx.font = 'bold 20px Arial';
+            
+            // Song name with background
+            let songText = `Song: ${currentSong}`;
+            let songTextWidth = ctx.measureText(songText).width;
+            
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(topLeft.x - 5, topLeft.y - 80, songTextWidth + 10, 30);
+            
+            ctx.fillStyle = 'rgba(255, 255, 0, 0.9)';
+            ctx.fillText(songText, topLeft.x, topLeft.y - 55);
+            
+            // Current chord with background
+            let chordText = `Play: ${currentChord}`;
+            let chordTextWidth = ctx.measureText(chordText).width;
+            
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(topLeft.x - 5, topLeft.y - 45, chordTextWidth + 10, 30);
+            
+            ctx.fillStyle = 'rgba(255, 255, 0, 0.9)';
+            ctx.fillText(chordText, topLeft.x, topLeft.y - 20);
+            
+            // Display chord guidance
+            displayChordGuidance(ctx, topLeft, bottomRight, currentChord);
+        }
+        
+        // Display chord guidance on the fingerboard
+        function displayChordGuidance(ctx, topLeft, bottomRight, chordName) {
+            if (!chordShapes[chordName]) return;
+            
+            let chordShape = chordShapes[chordName];
+            
+            // Display chord name
+            ctx.font = 'bold 26px Arial'; // Larger font for chord name
+            let text = `Chord: ${chordName}`;
+            let textWidth = ctx.measureText(text).width;
+            
+            // Add background for better visibility
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.8)'; // Darker background
+            ctx.fillRect(topLeft.x - 5, bottomRight.y + 10, textWidth + 10, 35);
+            
+            ctx.fillStyle = 'rgba(0, 255, 255, 1.0)'; // Brighter text
+            ctx.fillText(text, topLeft.x, bottomRight.y + 35);
+            
+            // Draw finger positions for the chord
+            for (let stringIdx = 0; stringIdx < chordShape.length; stringIdx++) {
+                let fret = chordShape[stringIdx];
+                if (fret === -1) continue; // String not played
+                
+                // Calculate position
+                let y = stringPositions[stringIdx];
+                let x = (fretPositions[fret] + fretPositions[fret+1]) / 2;
+                
+                // Draw a circle at the position with improved visibility
+                // First draw an outer glow
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+                ctx.beginPath();
+                ctx.arc(x, y, 18, 0, 2 * Math.PI);
+                ctx.fill();
+                
+                // Then draw the main marker
+                ctx.fillStyle = 'rgba(0, 255, 255, 0.9)'; // Brighter cyan
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(x, y, 15, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.stroke();
+                
+                // Add fret number inside circle for clarity
+                ctx.fillStyle = 'black';
+                ctx.font = 'bold 14px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(fret.toString(), x, y);
+            }
+        }
+        
+        // Main processing function for video frames
+        function processVideo() {
+            if (!streaming) return;
+            
+            try {
+                // Try to use OpenCV if available
+                if (typeof cv !== 'undefined') {
+                    // Create video source
+                    if (!src) {
+                        src = new cv.Mat(video.height, video.width, cv.CV_8UC4);
+                    }
+                    if (!dst) {
+                        dst = new cv.Mat(video.height, video.width, cv.CV_8UC1);
+                    }
+                    if (!cap) {
+                        cap = new cv.VideoCapture(video);
+                    }
+                    
+                    // Read frame
+                    cap.read(src);
+                    
+                    // Flip horizontally for mirror effect
+                    cv.flip(src, src, 1);
+                    
+                    // Convert to canvas
+                    cv.imshow('canvasOutput', src);
+                    
+                    // Draw on the canvas using the canvas 2D context
+                    let canvasCtx = canvas.getContext('2d');
+                    
+                    // Calculate fingerboard position
+                    let fingerboardRect = calculateFingerboard(src);
+                    
+                    // Draw fingerboard
+                    drawFingerboard(canvasCtx, fingerboardRect.topLeft, fingerboardRect.bottomRight);
+                    
+                    // Update song progression
+                    updateSongProgression(canvasCtx, fingerboardRect.topLeft, fingerboardRect.bottomRight);
+                } else {
+                    // Fallback if OpenCV is not available
+                    fallbackProcessing();
+                }
+            } catch (err) {
+                log(`Error in processVideo: ${err}`);
+                fallbackProcessing();
+            }
+            
+            // Request next frame
+            requestAnimationFrame(processVideo);
+        }
+        
+        // Fallback processing without OpenCV
+        function fallbackProcessing() {
+            try {
+                // Draw video frame on canvas
+                context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                
+                // Calculate fingerboard position (simplified)
+                let topLeft = { x: Math.floor(canvas.width * 0.1), y: Math.floor(canvas.height * 0.2) };
+                let bottomRight = { x: Math.floor(canvas.width * 0.9), y: Math.floor(canvas.height * 0.8) };
+                
+                // Calculate string and fret positions
+                let stringGap = (bottomRight.y - topLeft.y) / (numStrings - 1);
+                stringPositions = [];
+                for (let i = 0; i < numStrings; i++) {
+                    stringPositions.push(Math.floor(topLeft.y + i * stringGap));
+                }
+                
+                let fretGap = (bottomRight.x - topLeft.x) / numFrets;
+                fretPositions = [];
+                for (let i = 0; i <= numFrets; i++) {
+                    fretPositions.push(Math.floor(topLeft.x + i * fretGap));
+                }
+                
+                // Draw fingerboard
+                drawFingerboard(context, topLeft, bottomRight);
+                
+                // Update song progression
+                updateSongProgression(context, topLeft, bottomRight);
+            } catch (err) {
+                log(`Error in fallback processing: ${err}`);
+            }
+        }
+        
+        // Utility function to log debug info
+        function log(message) {
+            console.log(message);
+            let timestamp = new Date().toLocaleTimeString();
+            debugInfoElement.innerHTML = `[${timestamp}] ${message}<br>` + debugInfoElement.innerHTML;
+            
+            // Limit debug info to avoid performance issues
+            if (debugInfoElement.innerHTML.length > 5000) {
+                debugInfoElement.innerHTML = debugInfoElement.innerHTML.substring(0, 5000) + "...";
+            }
+        }
+        
+        // Check if OpenCV.js is already loaded
+        if (typeof cv !== 'undefined') {
+            onOpenCvReady();
+        } else {
+            // If OpenCV.js isn't loaded yet, set up event listeners
+            window.addEventListener('load', () => {
+                // Wait a bit to see if OpenCV.js loads
+                setTimeout(() => {
+                    if (typeof cv !== 'undefined') {
+                        onOpenCvReady();
+                    } else {
+                        onOpenCvError();
+                    }
+                }, 3000);
+            });
+        }
+        
+        // Clean up resources when the page is closed
+        window.addEventListener('beforeunload', () => {
+            stopCamera();
+            if (src) src.delete();
+            if (dst) dst.delete();
+        });
+    </script>
+</body>
+</html> 

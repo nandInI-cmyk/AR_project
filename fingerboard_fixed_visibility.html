@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AR Fingerboard with Enhanced Visibility</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background-color: #121212;
+            color: white;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+        h1 {
+            color: #4CAF50;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .container {
+            position: relative;
+            max-width: 960px;
+            width: 100%;
+            margin: 0 auto;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.3);
+            border-radius: 10px;
+            overflow: hidden;
+            background-color: #1e1e1e;
+            padding-bottom: 20px;
+        }
+        .video-container {
+            position: relative;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        #videoElement {
+            width: 100%;
+            height: auto;
+            background-color: #111;
+            display: block;
+        }
+        #canvasOutput {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        .controls {
+            margin: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            width: calc(100% - 40px);
+            justify-content: center;
+            background-color: #2a2a2a;
+            padding: 15px;
+            border-radius: 8px;
+        }
+        button {
+            padding: 10px 18px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: bold;
+            min-width: 120px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        button:hover {
+            background-color: #45a049;
+            transform: translateY(-2px);
+        }
+        button:disabled {
+            background-color: #555;
+            cursor: not-allowed;
+            transform: none;
+        }
+        select {
+            padding: 10px 15px;
+            border-radius: 6px;
+            background-color: #333;
+            color: white;
+            border: 1px solid #555;
+            min-width: 150px;
+        }
+        #status {
+            margin: 20px;
+            padding: 12px 15px;
+            background-color: #333;
+            border-radius: 8px;
+            width: calc(100% - 40px);
+            text-align: center;
+            font-weight: bold;
+        }
+        .notification {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(0, 0, 0, 0.8);
+            color: #4CAF50;
+            padding: 15px 20px;
+            border-radius: 8px;
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+            text-align: center;
+            max-width: 400px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>AR Fingerboard with Enhanced Visibility</h1>
+    <div class="notification" id="notification">
+        Fingerboard visibility has been improved!
+    </div>
+    <div class="container">
+        <div class="video-container">
+            <video id="videoElement" autoplay></video>
+            <canvas id="canvasOutput"></canvas>
+        </div>
+        <div class="controls">
+            <button id="startButton">Start Camera</button>
+            <button id="stopButton" disabled>Stop Camera</button>
+            <select id="songSelect">
+                <option value="Let It Be">Let It Be</option>
+                <option value="Wonderwall">Wonderwall</option>
+                <option value="Sweet Home Alabama">Sweet Home Alabama</option>
+                <option value="Happy Birthday">Happy Birthday</option>
+            </select>
+            <button id="playButton" disabled>Play Song</button>
+            <button id="stopSongButton" disabled>Stop Song</button>
+        </div>
+        <div id="status">Ready. Click "Start Camera" to begin.</div>
+    </div>
+    
+    <audio id="audioPlayer" style="display: none;"></audio>
+
+    <script async src="https://docs.opencv.org/4.7.0/opencv.js" type="text/javascript"></script>
+    <script>
+        // Global variables
+        const video = document.getElementById('videoElement');
+        const canvas = document.getElementById('canvasOutput');
+        const ctx = canvas.getContext('2d');
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const songSelect = document.getElementById('songSelect');
+        const playButton = document.getElementById('playButton');
+        const stopSongButton = document.getElementById('stopSongButton');
+        const statusElement = document.getElementById('status');
+        const audioPlayer = document.getElementById('audioPlayer');
+        const notification = document.getElementById('notification');
+        
+        let streaming = false;
+        let stream = null;
+        let currentSong = null;
+        let currentChordIdx = 0;
+        let lastChordChangeTime = Date.now();
+        let chordDisplayTime = 3000; // 3 seconds
+        let animationId = null;
+        let frameCount = 0;
+        
+        // Fingerboard configuration
+        const numStrings = 6;
+        const numFrets = 12;
+        let stringPositions = [];
+        let fretPositions = [];
+        
+        // Note mapping
+        const notes = [
+            ['E2', 'F2', 'F#2', 'G2', 'G#2', 'A2', 'A#2', 'B2', 'C3', 'C#3', 'D3', 'D#3', 'E3'],
+            ['B2', 'C3', 'C#3', 'D3', 'D#3', 'E3', 'F3', 'F#3', 'G3', 'G#3', 'A3', 'A#3', 'B3'],
+            ['G3', 'G#3', 'A3', 'A#3', 'B3', 'C4', 'C#4', 'D4', 'D#4', 'E4', 'F4', 'F#4', 'G4'],
+            ['D3', 'D#3', 'E3', 'F3', 'F#3', 'G3', 'G#3', 'A3', 'A#3', 'B3', 'C4', 'C#4', 'D4'],
+            ['A2', 'A#2', 'B2', 'C3', 'C#3', 'D3', 'D#3', 'E3', 'F3', 'F#3', 'G3', 'G#3', 'A3'],
+            ['E2', 'F2', 'F#2', 'G2', 'G#2', 'A2', 'A#2', 'B2', 'C3', 'C#3', 'D3', 'D#3', 'E3']
+        ];
+        
+        // Chord shapes
+        const chordShapes = {
+            'C Major': [0, 1, 0, 2, 3, -1],
+            'G Major': [3, 0, 0, 0, 2, 3],
+            'D Major': [-1, -1, 0, 2, 3, 2],
+            'A Major': [0, 2, 2, 2, 0, -1],
+            'E Major': [0, 0, 1, 2, 2, 0],
+            'F Major': [1, 1, 2, 3, 3, 1],
+            'A Minor': [0, 1, 2, 2, 0, -1],
+            'E Minor': [0, 0, 0, 2, 2, 0],
+            'D Minor': [-1, -1, 0, 2, 3, 1],
+            'G7': [3, 0, 0, 0, 2, 1]
+        };
+        
+        // Song chord progressions
+        const songs = {
+            "Wonderwall": ["E Minor", "G Major", "D Major", "A Major"],
+            "Let It Be": ["C Major", "G Major", "A Minor", "F Major"],
+            "Sweet Home Alabama": ["D Major", "C Major", "G Major"],
+            "Happy Birthday": ["G Major", "D Major", "C Major", "G7"]
+        };
+        
+        // Song audio file
+        const songFiles = {
+            "Happy Birthday": "happy-birthday-314197.mp3"
+        };
+        
+        // Start camera
+        startButton.addEventListener('click', () => {
+            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                navigator.mediaDevices.getUserMedia({ video: true })
+                    .then(function(_stream) {
+                        stream = _stream;
+                        video.srcObject = stream;
+                        video.play();
+                        
+                        // Set canvas size to match video
+                        video.addEventListener('loadedmetadata', () => {
+                            canvas.width = video.videoWidth;
+                            canvas.height = video.videoHeight;
+                            startVideoProcessing();
+                        });
+                        
+                        startButton.disabled = true;
+                        stopButton.disabled = false;
+                        playButton.disabled = false;
+                        statusElement.textContent = "Camera started. The fingerboard should now be visible.";
+                        
+                        // Show notification about fixed fingerboard visibility
+                        notification.style.display = 'block';
+                        notification.textContent = "Fingerboard visibility FIXED! Look for the highly visible fretboard in the center.";
+                        setTimeout(() => {
+                            notification.style.display = 'none';
+                        }, 5000);
+                    })
+                    .catch(function(error) {
+                        console.error("Error accessing the camera: ", error);
+                        statusElement.textContent = "Error: Could not access the camera.";
+                    });
+            } else {
+                statusElement.textContent = "Error: Media devices not supported in this browser.";
+            }
+        });
+        
+        // Stop camera
+        stopButton.addEventListener('click', () => {
+            stopVideoProcessing();
+            
+            if (stream) {
+                const tracks = stream.getTracks();
+                tracks.forEach(track => track.stop());
+                video.srcObject = null;
+                stream = null;
+            }
+            
+            startButton.disabled = false;
+            stopButton.disabled = true;
+            playButton.disabled = true;
+            statusElement.textContent = "Camera stopped.";
+        });
+        
+        // Play song
+        playButton.addEventListener('click', () => {
+            const songName = songSelect.value;
+            selectSong(songName);
+            playButton.disabled = true;
+            stopSongButton.disabled = false;
+            statusElement.textContent = `Playing '${songName}'. Follow the chord progression.`;
+        });
+        
+        // Stop song
+        stopSongButton.addEventListener('click', () => {
+            stopAudio();
+            playButton.disabled = false;
+            stopSongButton.disabled = true;
+            statusElement.textContent = "Song stopped.";
+        });
+        
+        // Select song
+        function selectSong(songName) {
+            if (songs[songName]) {
+                currentSong = songName;
+                currentChordIdx = 0;
+                lastChordChangeTime = Date.now();
+                
+                // Stop any currently playing audio
+                stopAudio();
+                
+                // Play song audio if available
+                if (songName in songFiles) {
+                    try {
+                        audioPlayer.src = songFiles[songName];
+                        audioPlayer.play();
+                    } catch (e) {
+                        console.error("Error playing audio:", e);
+                    }
+                }
+            }
+        }
+        
+        // Stop audio
+        function stopAudio() {
+            audioPlayer.pause();
+            audioPlayer.currentTime = 0;
+        }
+        
+        // Calculate fingerboard position
+        function calculateFingerboard(width, height) {
+            // Use fixed size and position values for better visibility
+            const widthPadding = Math.floor(width * 0.15); // 15% padding on each side
+            const heightPaddingTop = Math.floor(height * 0.25); // 25% padding from top
+            const heightPaddingBottom = Math.floor(height * 0.15); // 15% padding from bottom
+            
+            // Calculate rectangle coordinates
+            const topLeft = { x: widthPadding, y: heightPaddingTop };
+            const bottomRight = { x: width - widthPadding, y: height - heightPaddingBottom };
+            
+            // Calculate string positions
+            const stringGap = (bottomRight.y - topLeft.y) / (numStrings - 1);
+            stringPositions = [];
+            for (let i = 0; i < numStrings; i++) {
+                stringPositions.push(Math.floor(topLeft.y + i * stringGap));
+            }
+            
+            // Calculate fret positions
+            const fretGap = (bottomRight.x - topLeft.x) / numFrets;
+            fretPositions = [];
+            for (let i = 0; i <= numFrets; i++) {
+                fretPositions.push(Math.floor(topLeft.x + i * fretGap));
+            }
+            
+            return { topLeft, bottomRight };
+        }
+        
+        // Draw fingerboard with enhanced visibility
+        function drawFingerboard(ctx, fingerboardRect) {
+            const { topLeft, bottomRight } = fingerboardRect;
+            
+            // Create a solid background for better visibility
+            ctx.fillStyle = "rgba(51, 51, 153, 0.8)"; // Blue-brown color with high opacity
+            ctx.fillRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
+            
+            // Add thick white border around the fingerboard
+            ctx.strokeStyle = "white";
+            ctx.lineWidth = 3;
+            ctx.strokeRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
+            
+            // Draw strings with bright color and increased thickness
+            ctx.strokeStyle = "cyan"; // Bright cyan color
+            ctx.lineWidth = 5;
+            for (const y of stringPositions) {
+                ctx.beginPath();
+                ctx.moveTo(topLeft.x, y);
+                ctx.lineTo(bottomRight.x, y);
+                ctx.stroke();
+            }
+            
+            // Draw frets with bright color and increased thickness
+            ctx.strokeStyle = "yellow"; // Bright yellow color
+            ctx.lineWidth = 5;
+            for (const x of fretPositions) {
+                ctx.beginPath();
+                ctx.moveTo(x, topLeft.y);
+                ctx.lineTo(x, bottomRight.y);
+                ctx.stroke();
+            }
+            
+            // Add fret numbers
+            ctx.font = "bold 24px Arial";
+            ctx.textAlign = "center";
+            for (let i = 1; i < fretPositions.length; i++) {
+                const text = i.toString();
+                const textWidth = ctx.measureText(text).width;
+                const textX = fretPositions[i - 1] + (fretPositions[i] - fretPositions[i - 1]) / 2;
+                const textY = topLeft.y - 10;
+                
+                // Draw background for text
+                ctx.fillStyle = "black";
+                ctx.fillRect(textX - textWidth / 2 - 5, textY - 24 - 5, textWidth + 10, 30);
+                
+                // Draw text
+                ctx.fillStyle = "cyan";
+                ctx.fillText(text, textX, textY);
+            }
+            
+            // Add string labels
+            const stringNames = ["E", "B", "G", "D", "A", "E"];
+            ctx.font = "bold 24px Arial";
+            ctx.textAlign = "right";
+            for (let i = 0; i < stringPositions.length; i++) {
+                const text = stringNames[i];
+                const textX = topLeft.x - 15;
+                const textY = stringPositions[i] + 8;
+                
+                // Draw background for string name
+                const textWidth = ctx.measureText(text).width;
+                ctx.fillStyle = "black";
+                ctx.fillRect(textX - textWidth - 5, textY - 24 + 5, textWidth + 10, 30);
+                
+                // Draw string name
+                ctx.fillStyle = "yellow";
+                ctx.fillText(text, textX, textY);
+            }
+            
+            // Add a title label "GUITAR FINGERBOARD"
+            ctx.font = "bold 28px Arial";
+            ctx.textAlign = "center";
+            const titleText = "GUITAR FINGERBOARD";
+            const titleX = (topLeft.x + bottomRight.x) / 2;
+            const titleY = topLeft.y - 40;
+            
+            // Draw background for title
+            const titleWidth = ctx.measureText(titleText).width;
+            ctx.fillStyle = "black";
+            ctx.fillRect(titleX - titleWidth / 2 - 10, titleY - 28 - 5, titleWidth + 20, 38);
+            
+            // Draw title
+            ctx.fillStyle = "cyan";
+            ctx.fillText(titleText, titleX, titleY);
+            
+            // Draw arrows pointing to the fingerboard (first 300 frames)
+            if (frameCount < 300) {
+                const arrowLength = 80;
+                const arrowColor = "rgb(0, 255, 0)"; // Bright green
+                ctx.strokeStyle = arrowColor;
+                ctx.fillStyle = arrowColor;
+                ctx.lineWidth = 3;
+                
+                // Calculate pulse effect
+                const pulse = 5 * Math.abs(Math.sin(frameCount / 10));
+                
+                // Draw arrows
+                drawArrow(ctx, 
+                    { x: ctx.canvas.width / 2, y: topLeft.y - arrowLength - 20 - pulse }, 
+                    { x: ctx.canvas.width / 2, y: topLeft.y - 20 }
+                );
+                
+                drawArrow(ctx, 
+                    { x: ctx.canvas.width / 2, y: bottomRight.y + arrowLength + 20 + pulse }, 
+                    { x: ctx.canvas.width / 2, y: bottomRight.y + 20 }
+                );
+                
+                drawArrow(ctx, 
+                    { x: topLeft.x - arrowLength - 20 - pulse, y: ctx.canvas.height / 2 }, 
+                    { x: topLeft.x - 20, y: ctx.canvas.height / 2 }
+                );
+                
+                drawArrow(ctx, 
+                    { x: bottomRight.x + arrowLength + 20 + pulse, y: ctx.canvas.height / 2 }, 
+                    { x: bottomRight.x + 20, y: ctx.canvas.height / 2 }
+                );
+                
+                // Add "THIS IS THE FINGERBOARD" text
+                ctx.font = "bold 18px Arial";
+                ctx.textAlign = "left";
+                const textX = topLeft.x - arrowLength - 20 - pulse;
+                const textY = ctx.canvas.height / 2;
+                
+                // Draw background
+                const textWidth1 = ctx.measureText("THIS IS THE").width;
+                const textWidth2 = ctx.measureText("FINGERBOARD").width;
+                const maxWidth = Math.max(textWidth1, textWidth2);
+                
+                ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+                ctx.fillRect(textX - 5, textY - 40, maxWidth + 10, 60);
+                
+                // Draw text
+                ctx.fillStyle = "rgb(0, 255, 0)";
+                ctx.fillText("THIS IS THE", textX, textY - 20);
+                ctx.fillText("FINGERBOARD", textX, textY + 20);
+            }
+        }
+        
+        // Helper function to draw an arrow
+        function drawArrow(ctx, from, to) {
+            const headLength = 15;
+            const angle = Math.atan2(to.y - from.y, to.x - from.x);
+            
+            // Draw line
+            ctx.beginPath();
+            ctx.moveTo(from.x, from.y);
+            ctx.lineTo(to.x, to.y);
+            ctx.stroke();
+            
+            // Draw arrowhead
+            ctx.beginPath();
+            ctx.moveTo(to.x, to.y);
+            ctx.lineTo(
+                to.x - headLength * Math.cos(angle - Math.PI / 6),
+                to.y - headLength * Math.sin(angle - Math.PI / 6)
+            );
+            ctx.lineTo(
+                to.x - headLength * Math.cos(angle + Math.PI / 6),
+                to.y - headLength * Math.sin(angle + Math.PI / 6)
+            );
+            ctx.closePath();
+            ctx.fill();
+        }
+        
+        // Show visibility message
+        function showVisibilityMessage(ctx, frameCount) {
+            if (frameCount < 300) {
+                // Draw a semi-transparent box at the top
+                ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+                ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height / 3);
+                
+                // Draw header
+                ctx.font = "bold 28px Arial";
+                ctx.textAlign = "center";
+                ctx.fillStyle = "cyan";
+                ctx.fillText("FINGERBOARD VISIBILITY FIXED!", ctx.canvas.width / 2, 50);
+                
+                // Draw explanation text
+                ctx.font = "bold 18px Arial";
+                ctx.textAlign = "left";
+                ctx.fillStyle = "white";
+                
+                const visibilityText = [
+                    "The fingerboard has been enhanced with:",
+                    "- Increased opacity (80%) to ensure visibility",
+                    "- Brighter colors and thicker lines (5px)",
+                    "- Larger labels for strings and frets",
+                    "- 'GUITAR FINGERBOARD' title for clarity"
+                ];
+                
+                for (let i = 0; i < visibilityText.length; i++) {
+                    ctx.fillText(visibilityText[i], ctx.canvas.width / 2 - 300, 100 + i * 30);
+                }
+                
+                // Draw flashing message
+                if (frameCount % 60 < 30) {
+                    ctx.font = "bold 22px Arial";
+                    ctx.textAlign = "center";
+                    ctx.fillStyle = "rgb(0, 255, 0)";
+                    ctx.fillText("LOOK AT THE FINGERBOARD IN THE CENTER!", 
+                        ctx.canvas.width / 2, ctx.canvas.height / 3 - 20);
+                }
+            }
+        }
+        
+        // Update song chord progression
+        function updateSongProgression(ctx, fingerboardRect) {
+            if (!currentSong) return;
+            
+            const currentTime = Date.now();
+            if (currentTime - lastChordChangeTime > chordDisplayTime) {
+                currentChordIdx = (currentChordIdx + 1) % songs[currentSong].length;
+                lastChordChangeTime = currentTime;
+            }
+            
+            const currentChord = songs[currentSong][currentChordIdx];
+            
+            // Display song information
+            ctx.font = "bold 20px Arial";
+            ctx.textAlign = "left";
+            
+            // Song name
+            const text1 = `Song: ${currentSong}`;
+            const text1Width = ctx.measureText(text1).width;
+            const text1X = fingerboardRect.topLeft.x;
+            const text1Y = fingerboardRect.topLeft.y - 50;
+            
+            // Background for song name
+            ctx.fillStyle = "black";
+            ctx.fillRect(text1X - 5, text1Y - 20 - 5, text1Width + 10, 30);
+            
+            // Draw song name
+            ctx.fillStyle = "yellow";
+            ctx.fillText(text1, text1X, text1Y);
+            
+            // Current chord
+            const text2 = `Play: ${currentChord}`;
+            const text2Width = ctx.measureText(text2).width;
+            const text2X = fingerboardRect.topLeft.x;
+            const text2Y = fingerboardRect.topLeft.y - 20;
+            
+            // Background for chord
+            ctx.fillStyle = "black";
+            ctx.fillRect(text2X - 5, text2Y - 20 - 5, text2Width + 10, 30);
+            
+            // Draw chord text
+            ctx.fillStyle = "yellow";
+            ctx.fillText(text2, text2X, text2Y);
+            
+            // Display chord guidance
+            displayChordGuidance(ctx, fingerboardRect, currentChord);
+        }
+        
+        // Display chord guidance
+        function displayChordGuidance(ctx, fingerboardRect, chordName) {
+            if (!chordShapes[chordName]) return;
+            
+            const chordShape = chordShapes[chordName];
+            
+            // Display chord name
+            ctx.font = "bold 28px Arial";
+            ctx.textAlign = "left";
+            
+            const text = `Chord: ${chordName}`;
+            const textWidth = ctx.measureText(text).width;
+            const textX = fingerboardRect.topLeft.x;
+            const textY = fingerboardRect.bottomRight.y + 40;
+            
+            // Background for chord name
+            ctx.fillStyle = "black";
+            ctx.fillRect(textX - 5, textY - 28 - 5, textWidth + 10, 38);
+            
+            // Draw chord name
+            ctx.fillStyle = "cyan";
+            ctx.fillText(text, textX, textY);
+            
+            // Draw finger positions for the chord
+            for (let i = 0; i < chordShape.length; i++) {
+                if (chordShape[i] === -1) continue; // String not played
+                
+                // Calculate position
+                const y = stringPositions[i];
+                const x = (fretPositions[chordShape[i]] + fretPositions[chordShape[i] + 1]) / 2;
+                
+                // Draw a circle at the position
+                ctx.beginPath();
+                ctx.arc(x, y, 15, 0, 2 * Math.PI);
+                ctx.fillStyle = "rgba(0, 255, 255, 0.7)";
+                ctx.fill();
+                ctx.lineWidth = 3;
+                ctx.strokeStyle = "black";
+                ctx.stroke();
+            }
+        }
+        
+        // Start video processing
+        function startVideoProcessing() {
+            streaming = true;
+            frameCount = 0;
+            
+            // Show immediate notification
+            notification.style.display = 'block';
+            setTimeout(() => {
+                notification.style.display = 'none';
+            }, 5000);
+            
+            function processVideo() {
+                if (!streaming) return;
+                
+                // Draw video frame to canvas
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                
+                // Calculate fingerboard position
+                const fingerboardRect = calculateFingerboard(canvas.width, canvas.height);
+                
+                // Draw the fingerboard with enhanced visibility
+                drawFingerboard(ctx, fingerboardRect);
+                
+                // Show visibility message
+                showVisibilityMessage(ctx, frameCount);
+                
+                // Update song progression
+                updateSongProgression(ctx, fingerboardRect);
+                
+                // Display instructions
+                if (!frameCount % 150 === 0) { // Every 5 seconds
+                    ctx.font = "bold 18px Arial";
+                    ctx.textAlign = "left";
+                    ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+                    ctx.fillRect(10, canvas.height - 40, 500, 30);
+                    ctx.fillStyle = "rgb(255, 100, 100)";
+                    ctx.fillText("Move your hand over the fingerboard to play notes", 20, canvas.height - 20);
+                }
+                
+                // Increment frame counter
+                frameCount++;
+                
+                // Continue processing
+                animationId = requestAnimationFrame(processVideo);
+            }
+            
+            // Start the processing loop
+            processVideo();
+        }
+        
+        // Stop video processing
+        function stopVideoProcessing() {
+            streaming = false;
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+        
+        // Wait for OpenCV.js to load
+        function onOpenCvReady() {
+            console.log('OpenCV.js is ready');
+            statusElement.textContent = "OpenCV.js loaded. Click 'Start Camera' to begin.";
+        }
+        
+        // Check if OpenCV.js is already loaded
+        if (typeof cv !== 'undefined') {
+            onOpenCvReady();
+        } else {
+            // Set up the callback for when OpenCV.js loads
+            window.onOpenCvReady = onOpenCvReady;
+        }
+    </script>
+</body>
+</html> 
