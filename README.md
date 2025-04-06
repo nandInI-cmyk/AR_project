@@ -1,6 +1,20 @@
-# Hand Tracking Project
+# ARiff
 
-A hand tracking application using computer vision techniques.
+ARiff is a virtual guitar experience that features real-time chord detection, visualization of the guitar fretboard, and dynamic finger positioning — bringing an interactive and immersive way to learn and play.
+
+
+https://github.com/user-attachments/assets/57a70636-b566-4551-9ab3-b04cddab75e2
+
+
+# Interactive Virtual guitar feat 
+"Watch finger positions change dynamically as the song plays — and watch your guitar skills grow with it."
+
+# Learn playing Diffrent song at your own pace .
+
+## About us 
+Ariff was born froma simple question: Why is learning guitar so difficult? Our team musicians,developers and educators came together to create an inoovative soultion that making learning guitar more intuitive and engagingthan ever before .
+
+## 
 
 ## Setup
 
@@ -11,48 +25,8 @@ A hand tracking application using computer vision techniques.
    python -m pip install -r requirements.txt
    ```
 
-## Project Versions
 
-This project has two versions:
 
-### 1. Basic Version (OpenCV Only)
-Uses only OpenCV for hand tracking through skin color detection and contour analysis.
 
-Run with:
-```
-python hand_tracking_opencv_only.py
-```
 
-Features:
-- Skin color detection
-- Hand contour visualization
-- Finger counting using contour analysis
-- FPS counter
 
-### 2. Advanced Version (Requires MediaPipe)
-Uses MediaPipe for more accurate hand landmark detection (requires Python 3.7-3.11).
-
-Run with:
-```
-python hand_tracking.py
-```
-or
-```
-python gesture_recognition.py
-```
-
-Features:
-- Precise hand landmark detection
-- Fingertip highlighting
-- Gesture recognition (in gesture_recognition.py)
-- FPS counter
-
-## Note on Compatibility
-
-MediaPipe may not be compatible with Python 3.12+ at this time. If you have Python 3.12 or newer, use the basic OpenCV-only version.
-
-If you want to use the advanced version with MediaPipe, consider installing Python 3.10 or 3.11 in a virtual environment.
-
-## Usage
-
-- Press 'q' to quit any of the applications 
